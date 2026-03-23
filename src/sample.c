@@ -2,7 +2,9 @@
 #include "fips202.h"
 #include "aes.h"
 #include <string.h>
+#include <stdlib.h>
 #include "config.h"
+#include "random.h"
 // This code is based on the implementation of FrodoKEM
 void scloudplus_mul_add_as_e(const uint8_t *seedA, const uint16_t *S,
 							 const uint16_t *E, uint16_t *B)
@@ -522,4 +524,200 @@ void scloudplus_samplephi(uint8_t *seed, uint16_t *matrixs)
 			k++;
 		}
 	}
+}
+
+/* ========================================================================
+	* Masked sampling functions (first-order arithmetic masking)
+	* ======================================================================== */
+
+#define SCLOUDPLUS_Q (1 << scloudplus_logq) /* q = 4096 for l=128 */
+#define SCLOUDPLUS_QMASK (SCLOUDPLUS_Q - 1) /* 0xFFF */
+
+/**
+	* Generate a random share matrix in Z_q from a seed.
+	* Outputs len elements uniformly distributed in [0, q-1].
+	*/
+static void generate_random_share(const uint8_t *seed, uint16_t *share,
+								  size_t len)
+{
+	/* Use SHAKE-256 to expand the seed into enough random bytes.
+		* Each element needs 12 bits, so we use 2 bytes per element
+		* and mask to logq bits. */
+	size_t bytelen = len * 2;
+	uint8_t *buf = (uint8_t *)malloc(bytelen);
+	shake256(buf, bytelen, seed, 32);
+	for (size_t i = 0; i < len; i++)
+	{
+		share[i] = ((uint16_t)buf[2 * i] | ((uint16_t)buf[2 * i + 1] << 8)) &
+				   SCLOUDPLUS_QMASK;
+	}
+	free(buf);
+}
+
+void scloudplus_masked_samplepsi(uint8_t *seed, uint16_t *share0,
+								 uint16_t *share1)
+{
+	size_t len = (size_t)scloudplus_n * scloudplus_nbar;
+
+	/* Step 1: Sample the ternary secret S using the standard procedure */
+	uint16_t *S = (uint16_t *)malloc(sizeof(uint16_t) * len);
+	scloudplus_samplepsi(seed, S);
+
+	/* Step 2: Generate random share_0 from fresh randomness */
+	uint8_t rand_seed[32];
+	randombytes(rand_seed, 32);
+	generate_random_share(rand_seed, share0, len);
+
+	/* Step 3: Compute share_1 = (S - share_0) mod q */
+	for (size_t i = 0; i < len; i++)
+	{
+		share1[i] = (S[i] - share0[i]) & SCLOUDPLUS_QMASK;
+	}
+
+	/* Step 4: Securely erase the plaintext secret */
+	memset(S, 0, sizeof(uint16_t) * len);
+	free(S);
+	memset(rand_seed, 0, 32);
+}
+
+void scloudplus_masked_samplephi(uint8_t *seed, uint16_t *share0,
+								 uint16_t *share1)
+{
+	size_t len = (size_t)scloudplus_mbar * scloudplus_m;
+
+	/* Step 1: Sample the ternary secret S' using the standard procedure */
+	uint16_t *S = (uint16_t *)malloc(sizeof(uint16_t) * len);
+	scloudplus_samplephi(seed, S);
+
+	/* Step 2: Generate random share_0 from fresh randomness */
+	uint8_t rand_seed[32];
+	randombytes(rand_seed, 32);
+	generate_random_share(rand_seed, share0, len);
+
+	/* Step 3: Compute share_1 = (S' - share_0) mod q */
+	for (size_t i = 0; i < len; i++)
+	{
+		share1[i] = (S[i] - share0[i]) & SCLOUDPLUS_QMASK;
+	}
+
+	/* Step 4: Securely erase the plaintext secret */
+	memset(S, 0, sizeof(uint16_t) * len);
+	free(S);
+	memset(rand_seed, 0, 32);
+}
+
+void scloudplus_reshare_s(const uint16_t *S, const uint8_t *beta,
+						  uint16_t *share0, uint16_t *share1)
+{
+	size_t len = (size_t)scloudplus_n * scloudplus_nbar;
+
+	/* Derive share_0 deterministically from beta via F (PRF) */
+	uint8_t derived_seed[32];
+	scloudplus_F(derived_seed, 32, beta, 32);
+
+	/* Generate random share_0 from derived seed */
+	generate_random_share(derived_seed, share0, len);
+
+	/* Compute share_1 = (S - share_0) mod q */
+	for (size_t i = 0; i < len; i++)
+	{
+		share1[i] = (S[i] - share0[i]) & SCLOUDPLUS_QMASK;
+	}
+
+	memset(derived_seed, 0, 32);
+}
+
+/* A * S accumulate onto B (B += A * S), no error term added */
+void scloudplus_mul_add_as(const uint8_t *seedA, const uint16_t *S,
+						   uint16_t *B)
+{
+	ALIGN_HEADER(32)
+	uint16_t AROWOUT[4 * scloudplus_n] ALIGN_FOOTER(32) = {0};
+	ALIGN_HEADER(32)
+	uint32_t AROWIN[4 * scloudplus_block_rowlen] ALIGN_FOOTER(32) = {0};
+	uint8_t aes_key_schedule[16 * 11];
+	AES128_load_schedule(seedA, aes_key_schedule);
+	for (int i = 0; i < scloudplus_m; i += 4)
+	{
+		for (int j = 0; j < scloudplus_block_number; j += 1)
+		{
+			AROWIN[scloudplus_block_size * j + 0 * scloudplus_block_rowlen] =
+				i * scloudplus_block_number + j;
+			AROWIN[scloudplus_block_size * j + 1 * scloudplus_block_rowlen] =
+				(i + 1) * scloudplus_block_number + j;
+			AROWIN[scloudplus_block_size * j + 2 * scloudplus_block_rowlen] =
+				(i + 2) * scloudplus_block_number + j;
+			AROWIN[scloudplus_block_size * j + 3 * scloudplus_block_rowlen] =
+				(i + 3) * scloudplus_block_number + j;
+		}
+		AES128_CTR_enc_sch((uint8_t *)AROWIN,
+						   4 * scloudplus_n * sizeof(uint16_t),
+						   aes_key_schedule, (uint8_t *)AROWOUT);
+
+		for (int k = 0; k < scloudplus_nbar; k++)
+		{
+			uint16_t sum[4] = {0};
+			for (int j = 0; j < scloudplus_n; j++)
+			{
+				uint16_t sp = S[k * scloudplus_n + j];
+				sum[0] += AROWOUT[0 * scloudplus_n + j] * sp;
+				sum[1] += AROWOUT[1 * scloudplus_n + j] * sp;
+				sum[2] += AROWOUT[2 * scloudplus_n + j] * sp;
+				sum[3] += AROWOUT[3 * scloudplus_n + j] * sp;
+			}
+			B[(i + 0) * scloudplus_nbar + k] += sum[0];
+			B[(i + 1) * scloudplus_nbar + k] += sum[1];
+			B[(i + 2) * scloudplus_nbar + k] += sum[2];
+			B[(i + 3) * scloudplus_nbar + k] += sum[3];
+		}
+	}
+	AES128_free_schedule(aes_key_schedule);
+}
+
+/* S * A accumulate onto C (C += S * A), no error term added */
+void scloudplus_mul_add_sa(const uint8_t *seedA, const uint16_t *S,
+						   uint16_t *C)
+{
+	ALIGN_HEADER(32)
+	uint16_t AROWOUT[8 * scloudplus_n] ALIGN_FOOTER(32) = {0};
+	uint8_t aes_key_schedule[16 * 11];
+	AES128_load_schedule(seedA, aes_key_schedule);
+
+	ALIGN_HEADER(32)
+	uint32_t AROWIN[8 * scloudplus_block_rowlen] ALIGN_FOOTER(32) = {0};
+
+	for (int i = 0; i < scloudplus_m; i += 8)
+	{
+		for (int q = 0; q < 8; q++)
+		{
+			for (int p = 0; p < scloudplus_block_number; p += 1)
+			{
+				AROWIN[q * scloudplus_block_rowlen +
+					   scloudplus_block_size * p] =
+					(i + q) * scloudplus_block_number + p;
+			}
+		}
+		AES128_CTR_enc_sch((uint8_t *)AROWIN,
+						   8 * scloudplus_n * sizeof(uint16_t),
+						   aes_key_schedule, (uint8_t *)AROWOUT);
+
+		for (int j = 0; j < scloudplus_mbar; j++)
+		{
+			uint16_t sp[8];
+			for (int p = 0; p < 8; p++)
+			{
+				sp[p] = S[j * scloudplus_m + i + p];
+			}
+			for (int q = 0; q < scloudplus_n; q++)
+			{
+				uint16_t sum = 0;
+				for (int p = 0; p < 8; p++)
+				{
+					sum += sp[p] * AROWOUT[p * scloudplus_n + q];
+				}
+				C[j * scloudplus_n + q] += sum;
+			}
+		}
+	}
+	AES128_free_schedule(aes_key_schedule);
 }

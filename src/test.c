@@ -61,6 +61,109 @@ static int kem_test(const char *named_parameters, int iterations)
 
 	return true;
 }
+
+/* ---- Masked KEM correctness test ---- */
+static int kem_test_masked(const char *named_parameters, int iterations)
+{
+	uint8_t pk[scloudplus_pk];
+	uint8_t sk[scloudplus_kem_sk];
+	uint8_t ctx[scloudplus_ctx];
+	uint8_t ssa[scloudplus_ss];
+	uint8_t ssb[scloudplus_ss];
+
+	printf("====================================================================="
+		   "========================================================\n");
+	printf("Testing correctness of MASKED KEM, system %s, "
+		   "tests for %d iterations\n",
+		   named_parameters, iterations);
+	printf("====================================================================="
+		   "========================================================\n");
+
+	for (int i = 0; i < iterations; i++)
+	{
+		scloud_kemkeygen_masked(pk, sk);
+		scloud_kemencaps_masked(pk, ctx, ssa);
+		scloud_kemdecaps_masked(sk, ctx, ssb);
+		if (memcmp(ssa, ssb, scloudplus_ss) != 0)
+		{
+			printf("MASKED KEM FAILED at iteration %d\n", i);
+			printf("ssa: ");
+			for (int j = 0; j < scloudplus_ss; j++)
+				printf("%02x", ssa[j]);
+			printf("\nssb: ");
+			for (int j = 0; j < scloudplus_ss; j++)
+				printf("%02x", ssb[j]);
+			printf("\n");
+			return false;
+		}
+	}
+	printf("Masked KEM Tests PASSED. All session keys matched.\n");
+	return true;
+}
+
+/* ---- Cross-compatibility test: masked keygen/enc <-> standard dec, and vice versa ---- */
+static int kem_test_cross(const char *named_parameters, int iterations)
+{
+	uint8_t pk[scloudplus_pk];
+	uint8_t sk[scloudplus_kem_sk];
+	uint8_t ctx[scloudplus_ctx];
+	uint8_t ssa[scloudplus_ss];
+	uint8_t ssb[scloudplus_ss];
+
+	printf("====================================================================="
+		   "========================================================\n");
+	printf("Testing cross-compatibility (masked <-> standard), system %s, "
+		   "tests for %d iterations\n",
+		   named_parameters, iterations);
+	printf("====================================================================="
+		   "========================================================\n");
+
+	/* Test 1: Standard keygen, masked encaps, masked decaps */
+	for (int i = 0; i < iterations; i++)
+	{
+		scloud_kemkeygen(pk, sk);
+		scloud_kemencaps_masked(pk, ctx, ssa);
+		scloud_kemdecaps_masked(sk, ctx, ssb);
+		if (memcmp(ssa, ssb, scloudplus_ss) != 0)
+		{
+			printf("Cross test 1 FAILED at iteration %d\n", i);
+			return false;
+		}
+	}
+	printf("  Cross test 1 PASSED (std keygen + masked enc/dec).\n");
+
+	/* Test 2: Masked keygen, standard encaps, masked decaps */
+	for (int i = 0; i < iterations; i++)
+	{
+		scloud_kemkeygen_masked(pk, sk);
+		scloud_kemencaps(pk, ctx, ssa);
+		scloud_kemdecaps_masked(sk, ctx, ssb);
+		if (memcmp(ssa, ssb, scloudplus_ss) != 0)
+		{
+			printf("Cross test 2 FAILED at iteration %d\n", i);
+			return false;
+		}
+	}
+	printf("  Cross test 2 PASSED (masked keygen + std enc + masked dec).\n");
+
+	/* Test 3: Masked keygen, masked encaps, standard decaps */
+	for (int i = 0; i < iterations; i++)
+	{
+		scloud_kemkeygen_masked(pk, sk);
+		scloud_kemencaps_masked(pk, ctx, ssa);
+		scloud_kemdecaps(sk, ctx, ssb);
+		if (memcmp(ssa, ssb, scloudplus_ss) != 0)
+		{
+			printf("Cross test 3 FAILED at iteration %d\n", i);
+			return false;
+		}
+	}
+	printf("  Cross test 3 PASSED (masked keygen/enc + std dec).\n");
+
+	printf("All cross-compatibility tests PASSED.\n");
+	return true;
+}
+
 static void kem_bench(const int seconds)
 {
 	uint8_t pk[scloudplus_pk];
@@ -85,18 +188,65 @@ static void kem_bench(const int seconds)
 		"KEM enc and decapsulate", seconds);
 }
 
+static void kem_bench_masked(const int seconds)
+{
+	uint8_t pk[scloudplus_pk];
+	uint8_t sk[scloudplus_kem_sk];
+	uint8_t ctx[scloudplus_ctx];
+	uint8_t ssa[scloudplus_ss];
+	uint8_t ssb[scloudplus_ss];
+
+	TIME_OPERATION_SECONDS({ scloud_kemkeygen_masked(pk, sk); },
+						   "Masked Key generation", seconds);
+
+	scloud_kemkeygen_masked(pk, sk);
+	TIME_OPERATION_SECONDS({ scloud_kemencaps_masked(pk, ctx, ssa); },
+						   "Masked KEM encapsulate", seconds);
+
+	scloud_kemencaps_masked(pk, ctx, ssa);
+	TIME_OPERATION_SECONDS({ scloud_kemdecaps_masked(sk, ctx, ssb); },
+						   "Masked KEM decapsulate", seconds);
+
+	TIME_OPERATION_SECONDS(
+		{
+			scloud_kemencaps_masked(pk, ctx, ssa);
+			scloud_kemdecaps_masked(sk, ctx, ssb);
+		},
+		"Masked KEM enc and decapsulate", seconds);
+}
+
 int main()
 {
 	int OK = true;
 
+	/* Standard KEM test */
 	OK = kem_test(SYSTEM_NAME, KEM_TEST_ITERATIONS);
 	if (OK != true)
 	{
 		goto exit;
 	}
 
+	/* Masked KEM test */
+	OK = kem_test_masked(SYSTEM_NAME, KEM_TEST_ITERATIONS);
+	if (OK != true)
+	{
+		goto exit;
+	}
+
+	/* Cross-compatibility test */
+	OK = kem_test_cross(SYSTEM_NAME, KEM_TEST_ITERATIONS);
+	if (OK != true)
+	{
+		goto exit;
+	}
+
+	/* Benchmarks */
 	PRINT_TIMER_HEADER
+	printf("\n--- Standard KEM ---\n");
 	kem_bench(KEM_BENCH_SECONDS);
+	printf("\n--- Masked KEM ---\n");
+	kem_bench_masked(KEM_BENCH_SECONDS);
+
 exit:
 	return (OK == true) ? EXIT_SUCCESS : EXIT_FAILURE;
 }

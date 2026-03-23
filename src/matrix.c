@@ -47,3 +47,44 @@ void scloudplus_mul_add_sb_e(const uint16_t *S, const uint16_t *B,
 		}
 	}
 }
+
+/* ========================================================================
+ * Masked matrix multiplication functions
+ * ======================================================================== */
+
+void scloudplus_mul_add_cs(const uint16_t *C, const uint16_t *S,
+						   uint16_t *out)
+{
+	/* Accumulate out += C * S (mbar x n) * (n x nbar) -> (mbar x nbar) */
+	/* Note: S is stored as nbar columns of length n, i.e. S[col * n + row] */
+	for (int i = 0; i < scloudplus_mbar; i++)
+	{
+		for (int j = 0; j < scloudplus_nbar; j++)
+		{
+			for (int k = 0; k < scloudplus_n; k++)
+			{
+				out[i * scloudplus_nbar + j] +=
+					C[i * scloudplus_n + k] *
+					(uint16_t)S[j * scloudplus_n + k];
+			}
+		}
+	}
+}
+
+void scloudplus_mul_add_sb(const uint16_t *S, const uint16_t *B,
+						   uint16_t *out)
+{
+	/* Accumulate out += S * B (mbar x m) * (m x nbar) -> (mbar x nbar) */
+	for (int i = 0; i < scloudplus_mbar; i++)
+	{
+		for (int j = 0; j < scloudplus_nbar; j++)
+		{
+			for (int k = 0; k < scloudplus_m; k++)
+			{
+				out[i * scloudplus_nbar + j] +=
+					(uint16_t)S[i * scloudplus_m + k] *
+					B[k * scloudplus_nbar + j];
+			}
+		}
+	}
+}

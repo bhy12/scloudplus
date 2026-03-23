@@ -42,3 +42,52 @@ void scloud_kemdecaps(uint8_t *sk, uint8_t *ctx, uint8_t *ss)
 	scloudplus_K(ss, scloudplus_ss, ctx1, scloudplus_ctx + 32);
 	free(ctx1);
 }
+
+/* ========================================================================
+ * Masked KEM implementation (first-order arithmetic masking)
+ * ======================================================================== */
+
+void scloud_kemkeygen_masked(uint8_t *pk, uint8_t *sk)
+{
+	uint8_t z[32];
+	randombytes(z, 32);
+	scloudplus_pkekeygen_masked(pk, sk);
+	memcpy(sk + scloudplus_pke_sk, pk, scloudplus_pk);
+	scloudplus_H(sk + scloudplus_pke_sk + scloudplus_pk, pk, scloudplus_pk);
+	memcpy(sk + scloudplus_kem_sk - 32, z, 32);
+}
+
+void scloud_kemencaps_masked(uint8_t *pk, uint8_t *ctx, uint8_t *ss)
+{
+	uint8_t *kc = (uint8_t *)malloc(sizeof(uint8_t) * (scloudplus_ctx + 32));
+	uint8_t m[scloudplus_ss + 32], rk[64];
+	randombytes(m, scloudplus_ss);
+	scloudplus_H(m + scloudplus_ss, pk, scloudplus_pk);
+	scloudplus_G(rk, m, scloudplus_ss + 32);
+	scloudplus_pkeenc_masked(pk, m, rk, ctx);
+	memcpy(kc, rk + 32, 32);
+	memcpy(kc + 32, ctx, scloudplus_ctx);
+	scloudplus_K(ss, scloudplus_ss, kc, scloudplus_ctx + 32);
+	free(kc);
+}
+
+void scloud_kemdecaps_masked(uint8_t *sk, uint8_t *ctx, uint8_t *ss)
+{
+	uint8_t m[scloudplus_ss + 32], rk[64];
+	uint8_t *ctx1 = (uint8_t *)malloc(sizeof(uint8_t) * (scloudplus_ctx + 32));
+
+	/* Masked decryption: internally re-shares S with fresh beta */
+	scloudplus_pkedec_masked(sk, ctx, m);
+
+	memcpy(m + scloudplus_ss, sk + scloudplus_pke_sk + scloudplus_pk, 32);
+	scloudplus_G(rk, m, scloudplus_ss + 32);
+
+	/* Re-encryption uses masked Enc for side-channel protection */
+	scloudplus_pkeenc_masked(sk + scloudplus_pke_sk, m, rk, ctx1 + 32);
+
+	int8_t bl = scloudplus_verify(ctx, ctx1 + 32, scloudplus_ctx);
+	memcpy(ctx1 + 32, ctx, scloudplus_ctx);
+	scloudplus_cmov(ctx1, rk + 32, sk + scloudplus_kem_sk - 32, 32, bl);
+	scloudplus_K(ss, scloudplus_ss, ctx1, scloudplus_ctx + 32);
+	free(ctx1);
+}
