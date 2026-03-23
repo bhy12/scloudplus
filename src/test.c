@@ -8,6 +8,7 @@
 #include <string.h>
 #define KEM_TEST_ITERATIONS 100
 #define KEM_BENCH_SECONDS 1
+#define KEM_MEDIAN_ITERATIONS 1000
 #if (scloudplus_l == 128)
 #define SYSTEM_NAME "scloud plus 128"
 #elif (scloudplus_l == 192)
@@ -164,6 +165,143 @@ static int kem_test_cross(const char *named_parameters, int iterations)
 	return true;
 }
 
+/* ========================================================================
+ * Median-based benchmark (matches original paper: Table 5)
+ * "median count over 1000 measurements"
+ * ======================================================================== */
+
+static int cmp_uint64(const void *a, const void *b)
+{
+	uint64_t va = *(const uint64_t *)a;
+	uint64_t vb = *(const uint64_t *)b;
+	if (va < vb) return -1;
+	if (va > vb) return 1;
+	return 0;
+}
+
+static uint64_t median_u64(uint64_t *arr, int n)
+{
+	qsort(arr, n, sizeof(uint64_t), cmp_uint64);
+	if (n % 2 == 1)
+		return arr[n / 2];
+	else
+		return (arr[n / 2 - 1] + arr[n / 2]) / 2;
+}
+
+static void kem_bench_median(const int iterations)
+{
+	uint8_t pk[scloudplus_pk];
+	uint8_t sk[scloudplus_kem_sk];
+	uint8_t ctx[scloudplus_ctx];
+	uint8_t ssa[scloudplus_ss];
+	uint8_t ssb[scloudplus_ss];
+
+	uint64_t *cycles_keygen  = (uint64_t *)malloc(sizeof(uint64_t) * iterations);
+	uint64_t *cycles_encaps  = (uint64_t *)malloc(sizeof(uint64_t) * iterations);
+	uint64_t *cycles_decaps  = (uint64_t *)malloc(sizeof(uint64_t) * iterations);
+	uint64_t *cycles_encdec  = (uint64_t *)malloc(sizeof(uint64_t) * iterations);
+
+	volatile uint64_t t0, t1;
+
+	/* Warm up */
+	scloud_kemkeygen(pk, sk);
+	scloud_kemencaps(pk, ctx, ssa);
+	scloud_kemdecaps(sk, ctx, ssb);
+
+	for (int i = 0; i < iterations; i++)
+	{
+		t0 = rdtsc();
+		scloud_kemkeygen(pk, sk);
+		t1 = rdtsc();
+		cycles_keygen[i] = (t1 >= t0) ? (t1 - t0) : (t1 + ((uint64_t)1 << 32) - t0);
+
+		t0 = rdtsc();
+		scloud_kemencaps(pk, ctx, ssa);
+		t1 = rdtsc();
+		cycles_encaps[i] = (t1 >= t0) ? (t1 - t0) : (t1 + ((uint64_t)1 << 32) - t0);
+
+		t0 = rdtsc();
+		scloud_kemdecaps(sk, ctx, ssb);
+		t1 = rdtsc();
+		cycles_decaps[i] = (t1 >= t0) ? (t1 - t0) : (t1 + ((uint64_t)1 << 32) - t0);
+
+		cycles_encdec[i] = cycles_encaps[i] + cycles_decaps[i];
+	}
+
+	uint64_t med_kg = median_u64(cycles_keygen, iterations);
+	uint64_t med_en = median_u64(cycles_encaps, iterations);
+	uint64_t med_de = median_u64(cycles_decaps, iterations);
+	uint64_t med_ed = median_u64(cycles_encdec, iterations);
+
+	printf("%-30s %12" PRIu64 "\n", "KeyGen",            med_kg);
+	printf("%-30s %12" PRIu64 "\n", "Encaps",            med_en);
+	printf("%-30s %12" PRIu64 "\n", "Decaps",            med_de);
+	printf("%-30s %12" PRIu64 "\n", "Encaps + Decaps",   med_ed);
+
+	free(cycles_keygen);
+	free(cycles_encaps);
+	free(cycles_decaps);
+	free(cycles_encdec);
+}
+
+static void kem_bench_median_masked(const int iterations)
+{
+	uint8_t pk[scloudplus_pk];
+	uint8_t sk[scloudplus_kem_sk];
+	uint8_t ctx[scloudplus_ctx];
+	uint8_t ssa[scloudplus_ss];
+	uint8_t ssb[scloudplus_ss];
+
+	uint64_t *cycles_keygen  = (uint64_t *)malloc(sizeof(uint64_t) * iterations);
+	uint64_t *cycles_encaps  = (uint64_t *)malloc(sizeof(uint64_t) * iterations);
+	uint64_t *cycles_decaps  = (uint64_t *)malloc(sizeof(uint64_t) * iterations);
+	uint64_t *cycles_encdec  = (uint64_t *)malloc(sizeof(uint64_t) * iterations);
+
+	volatile uint64_t t0, t1;
+
+	/* Warm up */
+	scloud_kemkeygen_masked(pk, sk);
+	scloud_kemencaps_masked(pk, ctx, ssa);
+	scloud_kemdecaps_masked(sk, ctx, ssb);
+
+	for (int i = 0; i < iterations; i++)
+	{
+		t0 = rdtsc();
+		scloud_kemkeygen_masked(pk, sk);
+		t1 = rdtsc();
+		cycles_keygen[i] = (t1 >= t0) ? (t1 - t0) : (t1 + ((uint64_t)1 << 32) - t0);
+
+		t0 = rdtsc();
+		scloud_kemencaps_masked(pk, ctx, ssa);
+		t1 = rdtsc();
+		cycles_encaps[i] = (t1 >= t0) ? (t1 - t0) : (t1 + ((uint64_t)1 << 32) - t0);
+
+		t0 = rdtsc();
+		scloud_kemdecaps_masked(sk, ctx, ssb);
+		t1 = rdtsc();
+		cycles_decaps[i] = (t1 >= t0) ? (t1 - t0) : (t1 + ((uint64_t)1 << 32) - t0);
+
+		cycles_encdec[i] = cycles_encaps[i] + cycles_decaps[i];
+	}
+
+	uint64_t med_kg = median_u64(cycles_keygen, iterations);
+	uint64_t med_en = median_u64(cycles_encaps, iterations);
+	uint64_t med_de = median_u64(cycles_decaps, iterations);
+	uint64_t med_ed = median_u64(cycles_encdec, iterations);
+
+	printf("%-30s %12" PRIu64 "\n", "Masked KeyGen",            med_kg);
+	printf("%-30s %12" PRIu64 "\n", "Masked Encaps",            med_en);
+	printf("%-30s %12" PRIu64 "\n", "Masked Decaps",            med_de);
+	printf("%-30s %12" PRIu64 "\n", "Masked Encaps + Decaps",   med_ed);
+
+	free(cycles_keygen);
+	free(cycles_encaps);
+	free(cycles_decaps);
+	free(cycles_encdec);
+}
+
+/* ---- Original mean-based benchmarks (kept for reference) ---- */
+
 static void kem_bench(const int seconds)
 {
 	uint8_t pk[scloudplus_pk];
@@ -240,11 +378,39 @@ int main()
 		goto exit;
 	}
 
-	/* Benchmarks */
+	/* ============================================================
+	 * Median-based benchmark (matching original paper methodology)
+	 * "median count over 1000 measurements"
+	 * ============================================================ */
+	printf("\n");
+	printf("====================================================================="
+		   "========================================================\n");
+	printf("Benchmark: median over %d measurements, %s\n",
+		   KEM_MEDIAN_ITERATIONS, SYSTEM_NAME);
+	printf("%-30s %12s\n", "Operation", "Cycles(median)");
+	printf("====================================================================="
+		   "========================================================\n");
+
+	printf("\n--- Standard KEM (median) ---\n");
+	kem_bench_median(KEM_MEDIAN_ITERATIONS);
+
+	printf("\n--- Masked KEM (median) ---\n");
+	kem_bench_median_masked(KEM_MEDIAN_ITERATIONS);
+
+	/* ============================================================
+	 * Mean-based benchmark (original ds_benchmark style)
+	 * ============================================================ */
+	printf("\n");
+	printf("====================================================================="
+		   "========================================================\n");
+	printf("Benchmark: mean-based (run for %d seconds each), %s\n",
+		   KEM_BENCH_SECONDS, SYSTEM_NAME);
+	printf("====================================================================="
+		   "========================================================\n");
 	PRINT_TIMER_HEADER
-	printf("\n--- Standard KEM ---\n");
+	printf("\n--- Standard KEM (mean) ---\n");
 	kem_bench(KEM_BENCH_SECONDS);
-	printf("\n--- Masked KEM ---\n");
+	printf("\n--- Masked KEM (mean) ---\n");
 	kem_bench_masked(KEM_BENCH_SECONDS);
 
 exit:
