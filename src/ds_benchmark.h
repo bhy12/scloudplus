@@ -49,9 +49,15 @@
 
 static uint64_t rdtsc(void)
 {
+#if defined(__x86_64__) || defined(_M_X64)
+	unsigned int lo, hi;
+	__asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+	return ((uint64_t)hi << 32) | lo;
+#else
 	uint64_t x;
 	__asm__ volatile(".byte 0x0f, 0x31" : "=A"(x));
 	return x;
+#endif
 }
 
 #define DEFINE_TIMER_VARIABLES                                                 \
