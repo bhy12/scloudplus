@@ -721,3 +721,117 @@ void scloudplus_mul_add_sa(const uint8_t *seedA, const uint16_t *S,
 	}
 	AES128_free_schedule(aes_key_schedule);
 }
+
+/* ========================================================================
+ * Fused two-share matrix multiplication (A expanded only once)
+ * ======================================================================== */
+
+void scloudplus_mul_add_as_e_2shares(const uint8_t *seedA,
+									 const uint16_t *share0,
+									 const uint16_t *share1,
+									 const uint16_t *E, uint16_t *B)
+{
+	memcpy(B, E, 2 * scloudplus_m * scloudplus_nbar);
+	ALIGN_HEADER(32)
+	uint16_t AROWOUT[4 * scloudplus_n] ALIGN_FOOTER(32) = {0};
+	ALIGN_HEADER(32)
+	uint32_t AROWIN[4 * scloudplus_block_rowlen] ALIGN_FOOTER(32) = {0};
+	uint8_t aes_key_schedule[16 * 11];
+	AES128_load_schedule(seedA, aes_key_schedule);
+	for (int i = 0; i < scloudplus_m; i += 4)
+	{
+		for (int j = 0; j < scloudplus_block_number; j += 1)
+		{
+			AROWIN[scloudplus_block_size * j + 0 * scloudplus_block_rowlen] =
+				i * scloudplus_block_number + j;
+			AROWIN[scloudplus_block_size * j + 1 * scloudplus_block_rowlen] =
+				(i + 1) * scloudplus_block_number + j;
+			AROWIN[scloudplus_block_size * j + 2 * scloudplus_block_rowlen] =
+				(i + 2) * scloudplus_block_number + j;
+			AROWIN[scloudplus_block_size * j + 3 * scloudplus_block_rowlen] =
+				(i + 3) * scloudplus_block_number + j;
+		}
+		AES128_CTR_enc_sch((uint8_t *)AROWIN, 4 * scloudplus_n * sizeof(uint16_t),
+						   aes_key_schedule, (uint8_t *)AROWOUT);
+
+		for (int k = 0; k < scloudplus_nbar; k++)
+		{
+			uint16_t sum0[4] = {0};
+			uint16_t sum1[4] = {0};
+			for (int j = 0; j < scloudplus_n; j++)
+			{
+				uint16_t a0 = AROWOUT[0 * scloudplus_n + j];
+				uint16_t a1 = AROWOUT[1 * scloudplus_n + j];
+				uint16_t a2 = AROWOUT[2 * scloudplus_n + j];
+				uint16_t a3 = AROWOUT[3 * scloudplus_n + j];
+				uint16_t s0 = share0[k * scloudplus_n + j];
+				uint16_t s1 = share1[k * scloudplus_n + j];
+				sum0[0] += a0 * s0;
+				sum0[1] += a1 * s0;
+				sum0[2] += a2 * s0;
+				sum0[3] += a3 * s0;
+				sum1[0] += a0 * s1;
+				sum1[1] += a1 * s1;
+				sum1[2] += a2 * s1;
+				sum1[3] += a3 * s1;
+			}
+			B[(i + 0) * scloudplus_nbar + k] += sum0[0] + sum1[0];
+			B[(i + 1) * scloudplus_nbar + k] += sum0[1] + sum1[1];
+			B[(i + 2) * scloudplus_nbar + k] += sum0[2] + sum1[2];
+			B[(i + 3) * scloudplus_nbar + k] += sum0[3] + sum1[3];
+		}
+	}
+	AES128_free_schedule(aes_key_schedule);
+}
+
+void scloudplus_mul_add_sa_e_2shares(const uint8_t *seedA,
+									 const uint16_t *share0,
+									 const uint16_t *share1,
+									 uint16_t *E, uint16_t *C)
+{
+	ALIGN_HEADER(32)
+	uint16_t AROWOUT[8 * scloudplus_n] ALIGN_FOOTER(32) = {0};
+	uint8_t aes_key_schedule[16 * 11];
+	AES128_load_schedule(seedA, aes_key_schedule);
+
+	ALIGN_HEADER(32)
+	uint32_t AROWIN[8 * scloudplus_block_rowlen] ALIGN_FOOTER(32) = {0};
+
+	for (int i = 0; i < scloudplus_m; i += 8)
+	{
+		for (int q = 0; q < 8; q++)
+		{
+			for (int p = 0; p < scloudplus_block_number; p += 1)
+			{
+				AROWIN[q * scloudplus_block_rowlen + scloudplus_block_size * p] =
+					(i + q) * scloudplus_block_number + p;
+			}
+		}
+		AES128_CTR_enc_sch((uint8_t *)AROWIN, 8 * scloudplus_n * sizeof(uint16_t),
+						   aes_key_schedule, (uint8_t *)AROWOUT);
+
+		for (int j = 0; j < scloudplus_mbar; j++)
+		{
+			uint16_t sp0[8], sp1[8];
+			for (int p = 0; p < 8; p++)
+			{
+				sp0[p] = share0[j * scloudplus_m + i + p];
+				sp1[p] = share1[j * scloudplus_m + i + p];
+			}
+			for (int q = 0; q < scloudplus_n; q++)
+			{
+				uint16_t sum0 = 0, sum1 = 0;
+				for (int p = 0; p < 8; p++)
+				{
+					uint16_t aval = AROWOUT[p * scloudplus_n + q];
+					sum0 += sp0[p] * aval;
+					sum1 += sp1[p] * aval;
+				}
+				E[j * scloudplus_n + q] += sum0 + sum1;
+			}
+		}
+	}
+	memcpy((unsigned char *)C, (unsigned char *)E,
+		   2 * scloudplus_mbar * scloudplus_n);
+	AES128_free_schedule(aes_key_schedule);
+}

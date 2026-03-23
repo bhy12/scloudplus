@@ -123,10 +123,8 @@ void scloudplus_pkekeygen_masked(uint8_t *pk, uint8_t *sk)
 	scloudplus_masked_samplepsi(r1, share0, share1);
 	scloudplus_sampleeta1(r2, E);
 
-	/* B = A * share0 + E */
-	scloudplus_mul_add_as_e(seedA, share0, E, B);
-	/* B += A * share1 (accumulate second share) */
-	scloudplus_mul_add_as(seedA, share1, B);
+	/* Fused: B = A * share0 + A * share1 + E, with A expanded only once */
+	scloudplus_mul_add_as_e_2shares(seedA, share0, share1, E, B);
 
 	/* Pack public key */
 	scloudplus_packpk(B, pk);
@@ -185,10 +183,8 @@ void scloudplus_pkeenc_masked(uint8_t *pk, uint8_t *m, uint8_t *r,
 	scloudplus_msgencode(m, mu0);
 	scloudplus_unpackpk(pk, B);
 
-	/* C1 = share0 * A + E1 */
-	scloudplus_mul_add_sa_e(seedA, share0, E1, C1);
-	/* C1 += share1 * A (accumulate second share) */
-	scloudplus_mul_add_sa(seedA, share1, C1);
+	/* Fused: C1 = share0 * A + share1 * A + E1, with A expanded only once */
+	scloudplus_mul_add_sa_e_2shares(seedA, share0, share1, E1, C1);
 
 	/* C2 = share0 * B + E2 */
 	scloudplus_mul_add_sb_e(share0, B, E2, C2);

@@ -53,4 +53,23 @@ void scloudplus_mul_add_as(const uint8_t *seedA, const uint16_t *S,
 void scloudplus_mul_add_sa(const uint8_t *seedA, const uint16_t *S,
 						   uint16_t *C);
 
+/**
+ * Fused two-share multiplication: B = A * share0 + E, then B += A * share1.
+ * Expands matrix A from seedA only ONCE (optimization over two separate calls).
+ * The two shares are multiplied independently to maintain side-channel security.
+ */
+void scloudplus_mul_add_as_e_2shares(const uint8_t *seedA,
+									 const uint16_t *share0,
+									 const uint16_t *share1,
+									 const uint16_t *E, uint16_t *B);
+
+/**
+ * Fused two-share multiplication: C = share0 * A + E, then C += share1 * A.
+ * Expands matrix A from seedA only ONCE (optimization over two separate calls).
+ */
+void scloudplus_mul_add_sa_e_2shares(const uint8_t *seedA,
+									 const uint16_t *share0,
+									 const uint16_t *share1,
+									 uint16_t *E, uint16_t *C);
+
 #endif

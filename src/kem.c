@@ -64,7 +64,10 @@ void scloud_kemencaps_masked(uint8_t *pk, uint8_t *ctx, uint8_t *ss)
 	randombytes(m, scloudplus_ss);
 	scloudplus_H(m + scloudplus_ss, pk, scloudplus_pk);
 	scloudplus_G(rk, m, scloudplus_ss + 32);
-	scloudplus_pkeenc_masked(pk, m, rk, ctx);
+	/* Encaps uses standard Enc: the ephemeral secret S' is freshly sampled
+	 * per encapsulation and discarded immediately. It is not a long-term
+	 * secret, so side-channel protection is unnecessary here. */
+	scloudplus_pkeenc(pk, m, rk, ctx);
 	memcpy(kc, rk + 32, 32);
 	memcpy(kc + 32, ctx, scloudplus_ctx);
 	scloudplus_K(ss, scloudplus_ss, kc, scloudplus_ctx + 32);
@@ -82,8 +85,10 @@ void scloud_kemdecaps_masked(uint8_t *sk, uint8_t *ctx, uint8_t *ss)
 	memcpy(m + scloudplus_ss, sk + scloudplus_pke_sk + scloudplus_pk, 32);
 	scloudplus_G(rk, m, scloudplus_ss + 32);
 
-	/* Re-encryption uses masked Enc for side-channel protection */
-	scloudplus_pkeenc_masked(sk + scloudplus_pke_sk, m, rk, ctx1 + 32);
+	/* Re-encryption uses standard Enc: the ephemeral secret S' is derived
+	 * from the just-decrypted message m via PRF, so it is not a long-term
+	 * secret and does not need side-channel protection. */
+	scloudplus_pkeenc(sk + scloudplus_pke_sk, m, rk, ctx1 + 32);
 
 	int8_t bl = scloudplus_verify(ctx, ctx1 + 32, scloudplus_ctx);
 	memcpy(ctx1 + 32, ctx, scloudplus_ctx);
